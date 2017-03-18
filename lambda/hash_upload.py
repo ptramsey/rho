@@ -19,6 +19,7 @@ logger.setLevel(logging.INFO)
 
 
 DEFAULT_S3_BUCKET = "fivestars-receipt-test"
+DEFAULT_HASH_FUNCTION = "sha256"
 
 
 def chunks(fp, chunk_size=4096):
@@ -32,20 +33,24 @@ def handler(event, context):
     s3 = boto3.resource('s3')
 
     bucket = os.environ.get("S3_BUCKET", DEFAULT_S3_BUCKET)
+    hash_function = os.environ.get("HASH_FUNCTION", DEFAULT_HASH_FUNCTION)
+
+    if hash_function not in hashlib.algorithms_available:
+        raise ValueError("{} is not a recognized hash function".format(hash_function))
 
     for record in event["Records"]:
         if not record["eventName"].startswith("ObjectCreated"):
             continue
 
         key = record["s3"]["object"]["key"]
-        if key.endswith(".sha256"):
+        if key.endswith(".{}".format(hash_function)):
             continue
 
         s3_object = s3.Object(bucket, key)
 
         try:
             response = s3_object.get()
-            hasher = hashlib.sha256()
+            hasher = hashlib.new(hash_function)
             with closing(response["Body"]) as body:
                 for chunk in chunks(body):
                     hasher.update(chunk)
@@ -56,7 +61,7 @@ def handler(event, context):
         file_hash = hasher.hexdigest()
         logger.info("Hashed s3://{}/{} to {}".format(bucket, key, file_hash))
 
-        (s3.Object(bucket, "{}.sha256".format(key))
+        (s3.Object(bucket, "{}.{}".format(key, hash_function))
                 .put(Body="{}\n".format(file_hash).encode('utf8')))
 
 
